@@ -13,7 +13,7 @@ void* authServer(void* arg)
 
 int main()
 {   
-    int opt, socketMain;
+    int opt, socketMain, acpRes;
     struct sockaddr_in mainServer;
     socklen_t mainLen = sizeof(mainServer);
     char buffer[512];
@@ -23,7 +23,7 @@ int main()
 
 
     // Crear socket, las dos piezas del servidor van a compartir el mismo socket
-    socketMain = socket(AF_INET, SOCK_DGRAM, 0);
+    socketMain = socket(AF_INET, SOCK_STREAM, 0);
     if (socketMain < 0)
     {
         perror("Error al crear el socket publico");
@@ -53,7 +53,37 @@ int main()
         perror("Error al crear el monitor del servidor principal");
         exit(EXIT_FAILURE);
     }
-       
+
+    
+    char myIp[INET_ADDRSTRLEN]; //Solo estoy haciendo una prueba
+    int myPort;
+
+    int num = getpeername(socketMain, (struct sockaddr*)&mainServer, &mainLen);
+    if (num < 0)
+    {
+        perror("Error al obtener la dirección del peer");
+        exit(EXIT_FAILURE);
+    }
+
+    myPort = htons(mainServer.sin_port);
+
+    char* a;
+    a = inet_ntop(AF_INET,&mainServer.sin_addr, myIp, (socklen_t)sizeof(myIp));
+    if (a == NULL)
+    {
+        perror("Error al convertir la dirección IP a cadena");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Dirección IP:Puerto = %s:%d\n",myIp, myPort);
+
+    acpRes = accept(socketMain, (struct sockaddr*)&mainServer, &mainLen);
+    if (acpRes < 0)
+    {
+        perror("Error al aceptar la primera conexión");
+        exit(EXIT_FAILURE);
+    }
+    printf("Esto no se va a ejecutar");
 
     return 0;
 }
