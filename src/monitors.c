@@ -16,5 +16,7 @@ ssize_t initMainMonitor(mainMonitor* m, int socket_fd)
     if (pthread_mutex_init(&(m->mutexFire), NULL) != 0)
         return -1;
 
+
+
     return 0;
 }
