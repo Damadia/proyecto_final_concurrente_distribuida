@@ -1,52 +1,52 @@
-# --- Variables
 CC = gcc
-CFLAGS = -Iinclude -pthread
+CFLAGS = -Wall -Wextra -Iinclude -pthread
 LDFLAGS = -pthread
 
-# --- Rutas
 SRC_DIR = src
 OBJ_DIR = obj
 BIN_DIR = bin
 INC_DIR = include
 
-# Obterner los códgios fuente (ve agregandolos aquí conforme los vayas creando)
-SRCS = $(SRC_DIR)/main.c $(SRC_DIR)/monitors.c
+# Sources for each executable
+SRCS_MAIN = $(SRC_DIR)/main.c $(SRC_DIR)/monitors.c
+SRCS_AUTH = $(SRC_DIR)/authServer.c $(SRC_DIR)/monitors.c
+SRCS_CLIENT = $(SRC_DIR)/authClient.c
 
-# de .c a .o
-OBJS = $(SRCS:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
+OBJS_MAIN = $(SRCS_MAIN:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
+OBJS_AUTH = $(SRCS_AUTH:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
+OBJS_CLIENT = $(SRCS_CLIENT:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
 
-# --- Ejecutables
-# Ubicación del ejecutable principal
-TARGET = $(BIN_DIR)/program
+TARGET_MAIN = $(BIN_DIR)/main
+TARGET_AUTH = $(BIN_DIR)/authServer
+TARGET_CLIENT = $(BIN_DIR)/authClient
 
-# sintaxis para agregar más ejecutables si es necesario:
-# TARGETS = $(BIN_DIR)/program $(BIN_DIR)/another_program
+all: directories $(TARGET_MAIN) $(TARGET_AUTH) $(TARGET_CLIENT)
 
-# Ejecutar todos los ejecutables (regla por defecto)
-all: directories $(TARGET)
-
-# Si la función clear es usada borrará los obj y binarios, con está los crea
 directories:
 	mkdir -p $(OBJ_DIR) $(BIN_DIR)
 
-# de .c a .o
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# .o a ejecutbles
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LDFLAGS)
+$(TARGET_MAIN): $(OBJS_MAIN)
+	$(CC) $(CFLAGS) -o $@ $(OBJS_MAIN) $(LDFLAGS)
 
+$(TARGET_AUTH): $(OBJS_AUTH)
+	$(CC) $(CFLAGS) -o $@ $(OBJS_AUTH) $(LDFLAGS)
 
-# --- PHONY 
+$(TARGET_CLIENT): $(OBJS_CLIENT)
+	$(CC) $(CFLAGS) -o $@ $(OBJS_CLIENT) $(LDFLAGS)
 
-# >>> Clean borra las carpetas bin y obj con los ejecutables y .o respectivamente
-.PHONY: clean
 clean:
-	@echo "Acabas de borrar los archivos de bin y obj"
 	rm -rf $(OBJ_DIR)/*.o $(BIN_DIR)/*
 
-# >>> Run ejecuta main, serverAuth, serverFire, clientAuth, clientFire 
-.PHONY: run
-run: $(TARGET)
-	./$(TARGET)
+run-main: $(TARGET_MAIN)
+	./$(TARGET_MAIN)
+
+run-auth: $(TARGET_AUTH)
+	./$(TARGET_AUTH)
+
+run-client: $(TARGET_CLIENT)
+	./$(TARGET_CLIENT)
+
+.PHONY: all clean run-main run-auth run-client

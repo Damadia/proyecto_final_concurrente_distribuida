@@ -5,10 +5,9 @@
 #define _POSIX_C_SOURCE 200112L
 #endif
 
-
-
-
-
+#include "dependencies.h"
+#include "monitors.h"
+#include "ports.h"
 
 void* authServer(void* arg);
 void* firewall(void* arg);

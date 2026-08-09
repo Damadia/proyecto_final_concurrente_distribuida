@@ -1,178 +1,159 @@
 #include "main.h"
-#include "ports.h"
 #include "monitors.h"
-#include "dependencies.h"
+#include "ports.h"
 
+// Global variables for main process
+int currentReq = 0;
+pthread_mutex_t req_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_barrier_t barrier;
+int server_results[MAX_SERVERS_AUTH][2];  // [success][failure] per server
 
-void* authServer(void* arg)
-{
-    int* SF = malloc(sizeof(int)*2);//exitos y fracasos
-    SF[0] = 10; //<- NO OLVIDES BORRAR ESTO
-    SF[1] = 5;
+void* authServerThread(void* arg) {
+    int idx = *(int*)arg;
+    free(arg);
 
-
-    mainMonitor* m = (mainMonitor*)arg;
-    struct sockaddr_in addr_server;
-    socklen_t size_addr = sizeof(addr_server);
-
-    char* msgSend = "SM to SA: Servidor de autenticación estableció comunicación con el servidor prinicipal\n";
-    char rcvMsg[1024];
-    memset(rcvMsg, "", strlen(rcvMsg));
-    rcvMsg[1023] = "\0";
-
-    char* ip;
-    int port;
-
-    //aceptar al servidor autenticación
-    int fd = accept(m->socket_fd, (struct sockaddr*)&addr_server, &size_addr);
-    if (fd < 0)
-    {
-        perror("SM: El servidor de autenticación tuvo un problema al conectarse, cerrando hilo");
-        pthread_exit(NULL);
-        return NULL;
-    } 
-
-    //Mandale un mensaje a authServer.c que ya está la conexión con un hilo
-    if (send(fd, msgSend, (size_t)strlen(msgSend), 0) < 0)
-    {
-        perror("SM: El servidor de autenticación tuvo un error al mandar el mensaje, cerrando hilo");
-        pthread_exit(NULL);
-        close(fd);
-
-        return NULL;
-    }
-    
-    if(getpeername(fd, (struct sockaddr *)&addr_server, &size_addr) < 0)
-    {
-        perror("SM: Error al obtener la ip y puerto del servidor de autenticación");
-        pthread_exit(NULL);
-        close(fd);
+    struct sockaddr_in client_addr;
+    socklen_t len = sizeof(client_addr);
+    int client_fd = accept(g_main_socket, (struct sockaddr*)&client_addr, &len);
+    if (client_fd < 0) {
+        perror("authServerThread: accept");
         return NULL;
     }
 
-    port = htons(addr_server.sin_port);
-    ip = inet_ntop(AF_INET, &addr_server.sin_addr, ip, size_addr);
-    if (ip == NULL)
-    {
-        perror("Error al traducir la IP del server auth");
+    // Send the assigned ID to the auth server
+    if (send(client_fd, &idx, sizeof(idx), 0) != sizeof(idx)) {
+        perror("authServerThread: send id");
+        close(client_fd);
+        return NULL;
     }
 
-    printf("SM: ip-puerto del servidor de autenticación: %s:%d", ip, port);
-    
-    int* success;
-    ssize_t successRcv = sizeof(success); //esto son los bytes recibidos donde 0 significa que el servidor fue apagado
-    char abort[512];
+    printf("[Main] Auth server %d connected\n", idx);
 
-    while (1)
-    {
-        printf("SM: Esperando respuesta del servidor de autenticación");
-        successRcv = recv(fd, success, successRcv, 0);
-        if (successRcv == 0)
-        {
-            printf("SM from SA: Cerre el servidor de autenticación");
-            close(fd);
+    // Wait for all auth servers to connect
+    pthread_barrier_wait(&barrier);
 
-            pthread_exit(NULL);
-            return NULL;
-        }
-        else if (successRcv < 0)
-        {
-            printf("SM: Un error ocurrió al recibir un mensaje");
+    int local_success = 0, local_failure = 0;
+    int result;
+
+    while (1) {
+        ssize_t n = recv(client_fd, &result, sizeof(result), 0);
+        if (n <= 0) {
+            // connection closed or error
+            break;
         }
 
-        printf("SM: Escriba 'bye' para cerrar el hilo que mantiene la comunicación con el servidor de autenticación\n");
-        if (fgets(abort, strlen(abort), stdin) != NULL)
-        {
-            perror("Error en la captura de 'bye'\n");
-            continue;
+        // Update global counters
+        pthread_mutex_lock(&req_mutex);
+        currentReq++;
+        if (result == 1) {
+            local_success++;
+            server_results[idx][0]++;  // success
+        } else {
+            local_failure++;
+            server_results[idx][1]++;  // failure
         }
-        if (strcspn(abort, "bye") == 0)
-        {
-            printf("SM: Cerrando el servidor de autenticación");
+        int total = currentReq;
+        pthread_mutex_unlock(&req_mutex);
+
+        if (total >= CONDITION_EXIT) {
+            // signal all to stop (we'll close the socket to wake others)
             break;
         }
     }
 
-    close(fd);
-    pthread_exit((void*)SF);
+    close(client_fd);
+    // Return local counts to main
+    int* ret = malloc(2 * sizeof(int));
+    ret[0] = local_success;
+    ret[1] = local_failure;
+    return ret;
 }
 
-int main()
-{   
-    int opt, socketMain;
-    struct sockaddr_in mainServer;
-    socklen_t mainLen = sizeof(mainServer);
-    char buffer[512];
-    char* testMsh = "Mensaje del servidor principal";
+int main() {
+    signal(SIGPIPE, SIG_IGN);
 
-    mainMonitor m;
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        perror("main: socket");
+        exit(EXIT_FAILURE);
+    }
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(PORT_MAIN);
+    addr.sin_addr.s_addr = INADDR_ANY;
 
-    // Crear socket, las dos piezas del servidor van a compartir el mismo socket
-    socketMain = socket(AF_INET, SOCK_STREAM, 0);
-    if (socketMain < 0)
-    {
-        perror("Error al crear el socket publico");
+    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("main: bind");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+    if (listen(server_fd, MAX_SERVERS_AUTH + MAX_FIREWALLS) < 0) {
+        perror("main: listen");
+        close(server_fd);
         exit(EXIT_FAILURE);
     }
 
-    // Crear la dirección principal
-
-    mainServer.sin_family = AF_INET;
-    mainServer.sin_port = htons(PORT_MAIN);
-    mainServer.sin_addr.s_addr = INADDR_ANY;
-
-    //Hacer el bind
-
-    ssize_t bindRes = bind(socketMain,(struct sockaddr*)&mainServer, (socklen_t)mainLen);
-    if (bindRes < 0)
-    {
-        perror("Error al hacer el enlace del socket");
+    mainMonitor mon;
+    if (initMainMonitor(&mon, server_fd) < 0) {
+        perror("main: initMainMonitor");
+        close(server_fd);
         exit(EXIT_FAILURE);
     }
+    // store global socket for accept in threads
+    g_main_socket = server_fd;
 
+    // Initialize barrier
+    pthread_barrier_init(&barrier, NULL, MAX_SERVERS_AUTH);
 
-    //crear el monitor
-    if (initMainMonitor(&m, socketMain) < 0)
-    {
-        perror("Error al crear el monitor del servidor principal");
-        exit(EXIT_FAILURE);
+    // Create threads for each auth server
+    pthread_t threads[MAX_SERVERS_AUTH];
+    for (int i = 0; i < MAX_SERVERS_AUTH; i++) {
+        int* idx = malloc(sizeof(int));
+        *idx = i;
+        if (pthread_create(&threads[i], NULL, authServerThread, idx) != 0) {
+            perror("main: pthread_create");
+            free(idx);
+            exit(EXIT_FAILURE);
+        }
     }
 
-    //escuchar
-    int res;
-    if ((res = listen(socketMain, 2)) < 0)
-    {
-        perror("Error al escuchar los servers");
-        exit(EXIT_FAILURE);
+    // Wait for threads to finish and collect results
+    int total_success = 0, total_failure = 0;
+    int per_server_requests[MAX_SERVERS_AUTH] = {0};
+    for (int i = 0; i < MAX_SERVERS_AUTH; i++) {
+        int* res;
+        pthread_join(threads[i], (void**)&res);
+        if (res) {
+            per_server_requests[i] = res[0] + res[1];
+            total_success += res[0];
+            total_failure += res[1];
+            free(res);
+        }
     }
 
-    //crear hilo para el servidor de autenticación
-    void* server1_res;
-
-    if (pthread_create(m.thdsAuth[0], NULL, authServer, (void*)&m) != 0)
-    {
-        perror("MS: Error al crear un hilo de autenticación\n");
-        exit(EXIT_FAILURE);
+    // Print results table
+    printf("\n=== Main Server Results ===\n");
+    printf("Total requests processed: %d (Success: %d, Failure: %d)\n",
+           total_success + total_failure, total_success, total_failure);
+    printf("\nPer Auth Server:\n");
+    printf("Server\tRequests\tSuccess\tFailure\tSuccess/Total\n");
+    for (int i = 0; i < MAX_SERVERS_AUTH; i++) {
+        int req = per_server_requests[i];
+        double ratio = (req > 0) ? (double)server_results[i][0] / req : 0.0;
+        printf("%d\t%d\t\t%d\t%d\t%.2f\n",
+               i, req, server_results[i][0], server_results[i][1], ratio);
     }
 
-    if (pthread_join(m.thdsAuth[0], &server1_res) != 0)
-    {
-        perror("MS: Error al devolver los resultados del servidor de autenticación");
-        exit(EXIT_FAILURE);
-    }
-
-
-    if (server1_res == NULL)
-    {
-        perror("MS: Error en devolver los exitos y fracasos\n");
-        exit(EXIT_FAILURE);
-    }
-
-    int* server1_res_values = (int*)server1_res;
-
-    printf("MS: Relación exitos/fracasos: %f\n", server1_res_values[0] / server1_res_values[1]);
-
-
+    // Cleanup
+    pthread_barrier_destroy(&barrier);
+    destroyMainMonitor(&mon);
+    close(server_fd);
     return 0;
 }
+
+// Global variable for socket (used in threads)
+int g_main_socket;
